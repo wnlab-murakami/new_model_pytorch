@@ -1,0 +1,9 @@
+# 📄 requirements.txt
+# PyTorch本体以外のライブラリリスト
+
+numpy
+scipy
+natsort
+tqdm
+matplotlib
+wandb

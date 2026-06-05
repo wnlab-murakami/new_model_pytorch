@@ -1,4 +1,20 @@
-learning_data/
-test_data/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# データ・モデル（容量大）
+*.hdf5
+*.mat
+*.pth
+*.pkl
 saved_models_pytorch/
 inference_results_pytorch/
+learning_data/
+test_data/
+
+# wandb
+wandb/
+
+# エディタ
+.vscode/

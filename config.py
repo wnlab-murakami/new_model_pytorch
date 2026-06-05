@@ -10,13 +10,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- データ設定 ---
 DATA_CONFIG = {
-    "learning_data_path": os.path.join(BASE_DIR, "learning_data/2025_6_20_23"),
-    "test_data_path": os.path.join(BASE_DIR, "test_data/2025_6_21_22"),
-    "input_dir_name": "input",
-    "label_dir_name": "label",
-    "real_dir_name": "real",
-    "imag_dir_name": "imag",
-    "file_pattern": "real_input_*.txt", # 実部ファイルを基準にファイルを検索
+    "hdf5_learning_path": os.path.join(BASE_DIR, "learning_data/sim_data.hdf5"),
+    "hdf5_test_path": os.path.join(BASE_DIR, "test_data/experiment_data.hdf5"),
+    # "learning_data_path": os.path.join(BASE_DIR, "learning_data/2025_6_20_23"),
+    # "test_data_path": os.path.join(BASE_DIR, "test_data/2025_6_21_22"),
+    # "input_dir_name": "input",
+    # "label_dir_name": "label",
+    # "real_dir_name": "real",
+    # "imag_dir_name": "imag",
+    # "file_pattern": "real_input_*.txt", # 実部ファイルを基準にファイルを検索
 }
 
 # --- 前処理・正規化設定 ---
@@ -49,6 +51,6 @@ TRAIN_CONFIG = {
 
 # --- 推論設定 ---
 INFERENCE_CONFIG = {
-    "trained_model_path": os.path.join(TRAIN_CONFIG["model_save_path"], "best_model.pth"),
-    "output_mat_path": os.path.join(BASE_DIR, "inference_results_pytorch", f"complex_{DT_NOW:%Y%m%d_%H%M}"),
+    "trained_model_path": os.path.join(BASE_DIR, "saved_models_pytorch/Complex_Attention_biLSTM_20260605_2150", "best_model.pth"),
+    "output_hdf5_path": os.path.join(BASE_DIR, "inference_results_pytorch", f"complex_{DT_NOW:%Y%m%d_%H%M}"),
 }

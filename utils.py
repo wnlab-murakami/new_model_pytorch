@@ -5,6 +5,17 @@ import numpy as np
 import scipy.io
 import pickle
 import os
+import h5py
+
+def save_as_hdf5(filepath, data_dict, attributes=None):
+    """データをHDF5ファイルとして保存する"""
+    with h5py.File(filepath, 'w') as f:
+        for key, value in data_dict.items():
+            f.create_dataset(key, data=value, compression="gzip", compression_opts=4)
+        if attributes:
+            for key, value in attributes.items():
+                f.attrs[key] = value
+    print(f"ファイルを保存しました: {filepath}")
 
 def load_data_from_txt(filepath):
     """(単一の)テキストファイルからデータを読み込み、NumPy配列として返す"""
@@ -64,7 +75,8 @@ def max_abs_normalize_complex_channels(data_channels):
     # ブロードキャストのため次元を拡張 (..., 1) -> (..., 1, 1)
     max_abs_reshaped = np.expand_dims(max_abs, axis=-1)
     
-    normalized_data = data_channels / (max_abs_reshaped)
+    epsilon = 1e-8  # ゼロ除算を防ぐための小さな値
+    normalized_data = data_channels / (max_abs_reshaped + epsilon)  # ゼロ除算を防ぐために小さな値を加える
     
     return normalized_data, max_abs_reshaped
 

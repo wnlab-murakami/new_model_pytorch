@@ -1,0 +1,4 @@
+learning_data/
+test_data/
+saved_models_pytorch/
+inference_results_pytorch/

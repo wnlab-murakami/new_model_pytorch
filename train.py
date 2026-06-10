@@ -4,6 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 import os
 from tqdm import tqdm
 import wandb  # wandbをインポート
@@ -15,7 +16,6 @@ import model
 
 def main():
     # --- 1. wandbの初期化 ---
-    # 設定ファイルからハイパーパラメータを読み込み、wandbに渡す
     hyperparameters = {
         "learning_rate": config.TRAIN_CONFIG["learning_rate"],
         "batch_size": config.TRAIN_CONFIG["batch_size"],
@@ -23,15 +23,20 @@ def main():
         "architecture": "AttentionBiLSTM (PyTorch)",
         "hidden_size": config.MODEL_CONFIG["hidden_size"],
         "num_attention_heads": config.MODEL_CONFIG["num_attention_heads"],
-        "dropout_rate": config.MODEL_CONFIG["dropout_rate"]
+        "dropout_rate": config.MODEL_CONFIG["dropout_rate"],
+        # [追加] schedulerのパラメータも記録
+        "lr_scheduler": "ReduceLROnPlateau",
+        "lr_scheduler_factor": 0.5,
+        "lr_scheduler_patience": 10,
+        "grad_clip_max_norm": 1.0,
     }
     wandb.init(
-        project="Radar-Interference-Suppression", # wandb上のプロジェクト名
-        name=f"run_{config.DT_NOW:%Y%m%d_%H%M%S}", # 各実験の実行名
+        project="Radar-Interference-Suppression",
+        name=f"run_{config.DT_NOW:%Y%m%d_%H%M%S}",
         config=hyperparameters
     )
 
-    # --- 2. デバイス、データローダー、モデルの準備  ---
+    # --- 2. デバイス、データローダー、モデルの準備 ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用するデバイス: {device}")
 
@@ -43,37 +48,57 @@ def main():
     net = model.build_model().to(device)
 
     def init_weights(m):
-            # もし層がLinear（全結合層）なら、これまで通り初期化
-            if isinstance(m, nn.Linear):
-                torch.nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    torch.nn.init.zeros_(m.bias)
-                    
-            # もし層がLSTMなら、内部の全パラメータを個別に処理
-            elif isinstance(m, nn.LSTM):
-                # LSTM層は複数の重みとバイアスを持つため、ループで処理する
-                for name, param in m.named_parameters():
-                    if 'weight' in name:
-                        # 'weight'という名前を含むパラメータをXavier初期化
-                        torch.nn.init.xavier_uniform_(param)
-                    elif 'bias' in name:
-                        # 'bias'という名前を含むパラメータをゼロで初期化
-                        torch.nn.init.zeros_(param)
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                torch.nn.init.zeros_(m.bias)
+        elif isinstance(m, nn.LSTM):
+            for name, param in m.named_parameters():
+                if 'weight' in name:
+                    torch.nn.init.xavier_uniform_(param)
+                elif 'bias' in name:
+                    torch.nn.init.zeros_(param)
 
-    # モデルの全レイヤーに上記の初期化関数を適用する
     net.apply(init_weights)
     print("モデルの重みをXavier初期化法で初期化しました。")
 
-    criterion = nn.MSELoss()
+    class ComplexMSELoss(nn.Module):
+        """
+        実部・虚部を直接比較するMSEに
+        dBスケールの振幅損失を加算して弱信号も学習させる。
+        """
+        def __init__(self, db_weight=0.5, eps=1e-10):
+            super().__init__()
+            self.db_weight = db_weight
+            self.eps = eps
+
+        def forward(self, pred, target):
+            mse = F.mse_loss(pred, target)
+            pred_amp   = torch.sqrt(pred[...,0]**2 + pred[...,1]**2 + self.eps)
+            target_amp = torch.sqrt(target[...,0]**2 + target[...,1]**2 + self.eps)
+            db_loss = F.mse_loss(torch.log10(pred_amp), torch.log10(target_amp))
+            return mse + self.db_weight * db_loss
+
+    criterion = ComplexMSELoss(db_weight=0.1)
     optimizer = optim.Adam(net.parameters(), lr=config.TRAIN_CONFIG["learning_rate"], eps=1e-6)
-    
-    # wandbにモデルの勾配や構造を監視させる (オプション)
+
+    # 学習率スケジューラ
+    # valid_lossがpatience=10エポック改善しなければLRを0.5倍に下げる
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=0.5,
+        patience=10,
+        verbose=True,   # LR変更時にコンソールに表示
+        min_lr=1e-7,    # これ以上は下げない下限
+    )
+
     wandb.watch(net, log="all", log_freq=100)
 
-    # --- 3. 学習ループ  ---
+    # --- 3. 学習ループ ---
     best_valid_loss = float('inf')
     os.makedirs(config.TRAIN_CONFIG["model_save_path"], exist_ok=True)
-    
+
     print("\n学習を開始します...")
     for epoch in range(config.TRAIN_CONFIG["epochs"]):
         # --- 学習フェーズ ---
@@ -86,10 +111,14 @@ def main():
             outputs = net(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
+
+            # 勾配クリッピング（勾配爆発によるloss振動を抑制）
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+
             optimizer.step()
             train_loss += loss.item()
             train_pbar.set_postfix({'loss': loss.item()})
-        
+
         avg_train_loss = train_loss / len(train_loader)
 
         # --- 検証フェーズ ---
@@ -105,22 +134,26 @@ def main():
                 valid_pbar.set_postfix({'loss': loss.item()})
 
         avg_valid_loss = valid_loss / len(valid_loader)
-        
-        print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.6f}, Valid Loss = {avg_valid_loss:.6f}")
+
+        # [追加①] スケジューラをvalid_lossで更新
+        scheduler.step(avg_valid_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+
+        print(f"Epoch {epoch+1}: Train Loss = {avg_train_loss:.6f}, Valid Loss = {avg_valid_loss:.6f}, LR = {current_lr:.2e}")
 
         # --- 4. wandbにメトリクスをロギング ---
         wandb.log({
             "epoch": epoch + 1,
             "train_loss": avg_train_loss,
-            "valid_loss": avg_valid_loss
+            "valid_loss": avg_valid_loss,
+            "learning_rate": current_lr,  # [追加③] LRの推移をwandbで可視化
         })
 
-        # 最良モデルの保存 
+        # 最良モデルの保存
         if avg_valid_loss < best_valid_loss:
             best_valid_loss = avg_valid_loss
             model_path = os.path.join(config.TRAIN_CONFIG["model_save_path"], "best_model.pth")
             torch.save(net.state_dict(), model_path)
-            # wandbに最高のスコアを記録
             wandb.summary["best_validation_loss"] = best_valid_loss
             print(f"モデルを保存しました: {model_path} (Valid Loss: {best_valid_loss:.6f})")
 

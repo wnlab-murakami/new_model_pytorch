@@ -42,7 +42,7 @@ MODEL_CONFIG = {
 
 # --- 学習設定 ---
 TRAIN_CONFIG = {
-    "epochs": 150,
+    "epochs": 300,
     "batch_size": 128,
     "learning_rate": 1e-4,
     "validation_split": 0.2,
@@ -51,6 +51,6 @@ TRAIN_CONFIG = {
 
 # --- 推論設定 ---
 INFERENCE_CONFIG = {
-    "trained_model_path": os.path.join(BASE_DIR, "saved_models_pytorch/Complex_Attention_biLSTM_20260605_2150", "best_model.pth"),
+    "trained_model_path": os.path.join(BASE_DIR, "saved_models_pytorch/Complex_Attention_biLSTM_20260610_0004", "best_model.pth"),
     "output_hdf5_path": os.path.join(BASE_DIR, "inference_results_pytorch", f"complex_{DT_NOW:%Y%m%d_%H%M}"),
 }

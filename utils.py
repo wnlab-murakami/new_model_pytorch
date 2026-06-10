@@ -21,7 +21,6 @@ def load_data_from_txt(filepath):
     """(単一の)テキストファイルからデータを読み込み、NumPy配列として返す"""
     with open(filepath, 'r') as f:
         lines = f.readlines()
-    # 空白で終わる行がある場合を考慮
     data = [list(map(float, line.strip().split())) for line in lines if line.strip()]
     return np.array(data, dtype=np.float32)
 
@@ -51,38 +50,64 @@ def load_stats(filepath):
     with open(filepath, 'rb') as f:
         return pickle.load(f)
 
-# --- 最大絶対値正規化 関連の関数 (新規追加) ---
+# --- 最大絶対値正規化 関連の関数 ---
+
 def max_abs_normalize_complex_channels(data_channels):
     """
-    複素数データ（2チャンネル形式）を行ごと（サンプルごと）に最大絶対値で正規化する。
+    複素数データ（2チャンネル形式）を行ごと（チャープごと）に最大絶対値で正規化する。
+    主にDataLoader内で1チャープ単位の処理に使用する。
+
     Args:
-        data_channels (np.ndarray): 形状が (..., sequence_length, 2) のNumpy配列。
+        data_channels (np.ndarray): 形状が (..., sequence_length, 2) の配列。
                                     最後の次元は [実部, 虚部]。
     Returns:
-        np.ndarray: 正規化されたデータ。形状は入力と同じ。
-        np.ndarray: 各サンプル（行）の最大絶対値。逆正規化に使用。形状は (..., 1, 1)。
+        normalized_data (np.ndarray): 正規化されたデータ。形状は入力と同じ。
+        max_abs_reshaped (np.ndarray): 各行の最大絶対値。形状は (..., 1, 1)。
     """
-    # 実部と虚部を取得
     real_part = data_channels[..., 0]
     imag_part = data_channels[..., 1]
-    
-    # 複素数の絶対値を計算
     abs_val = np.sqrt(real_part**2 + imag_part**2)
-    
-    # 各サンプル（行）の最大絶対値を見つける (..., sequence_length) -> (..., 1)
+
+    # 各チャープ（行）の最大絶対値: (..., sequence_length) -> (..., 1)
     max_abs = np.max(abs_val, axis=-1, keepdims=True)
-    
-    # ブロードキャストのため次元を拡張 (..., 1) -> (..., 1, 1)
-    max_abs_reshaped = np.expand_dims(max_abs, axis=-1)
-    
-    epsilon = 1e-8  # ゼロ除算を防ぐための小さな値
-    normalized_data = data_channels / (max_abs_reshaped + epsilon)  # ゼロ除算を防ぐために小さな値を加える
-    
+    max_abs_reshaped = np.expand_dims(max_abs, axis=-1)  # (..., 1, 1)
+
+    epsilon = 1e-8
+    normalized_data = data_channels / (max_abs_reshaped + epsilon)
+
     return normalized_data, max_abs_reshaped
+
+
+def max_abs_normalize_scenario(data_channels):
+    """
+    シナリオ全体（全チャープ共通）の最大絶対値1つで正規化する。
+    推論時に使用することで、チャープ間のスケールを統一し縦縞アーティファクトを抑制する。
+
+    Args:
+        data_channels (np.ndarray): 形状が (num_chirps, sequence_length, 2) の配列。
+                                    最後の次元は [実部, 虚部]。
+    Returns:
+        normalized_data (np.ndarray): 正規化されたデータ。形状は入力と同じ。
+        max_abs_val (float): 正規化に使用したスカラー値。逆正規化に使用。
+    """
+    real_part = data_channels[..., 0]
+    imag_part = data_channels[..., 1]
+    abs_val = np.sqrt(real_part**2 + imag_part**2)
+
+    # シナリオ全体（全チャープ・全レンジビン）から1つの最大値を取得
+    max_abs_val = float(np.max(abs_val))
+
+    epsilon = 1e-8
+    normalized_data = data_channels / (max_abs_val + epsilon)
+
+    return normalized_data, max_abs_val
+
 
 def max_abs_denormalize_complex_channels(normalized_data, max_abs_values):
     """
-    最大絶対値で正規化された複素数データ（2チャンネル形式）を元のスケールに戻す。
+    チャープごとの最大絶対値で正規化されたデータを元のスケールに戻す。
+    max_abs_normalize_complex_channels の逆変換。
+
     Args:
         normalized_data (np.ndarray): 正規化されたデータ。形状 (..., sequence_length, 2)。
         max_abs_values (np.ndarray): 正規化に使用した最大絶対値。形状 (..., 1, 1)。
@@ -90,6 +115,21 @@ def max_abs_denormalize_complex_channels(normalized_data, max_abs_values):
         np.ndarray: 元のスケールに戻されたデータ。
     """
     return normalized_data * max_abs_values
+
+
+def max_abs_denormalize_scenario(normalized_data, max_abs_val):
+    """
+    シナリオ全体の最大絶対値で正規化されたデータを元のスケールに戻す。
+    max_abs_normalize_scenario の逆変換。
+
+    Args:
+        normalized_data (np.ndarray): 正規化されたデータ。形状 (num_chirps, sequence_length, 2)。
+        max_abs_val (float): 正規化に使用したスカラー値。
+    Returns:
+        np.ndarray: 元のスケールに戻されたデータ。
+    """
+    return normalized_data * max_abs_val
+
 
 # --- ファイル保存関連 ---
 def save_as_mat(filepath, data_dict):
